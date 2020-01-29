@@ -1,7 +1,9 @@
 ﻿using System;
+using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
+using StardewValley.Menus;
 
 namespace AutoEat
 {
@@ -18,7 +20,9 @@ namespace AutoEat
         private static bool eatingFood = false; //just a boolean used to make it so that code doesn't run more than once.
 
         public static bool firstCall = false; //used in clearOldestHUDMessage()
-        public static float eatAtAmount;
+        public static float eatAtStaminaAmount;
+        public static float eatAtHealthAmount;
+        public static SButton instantEatKey;
 
         /*********
         ** Public methods
@@ -28,19 +32,37 @@ namespace AutoEat
         public override void Entry(IModHelper helper)
         {
             ModConfig config = helper.ReadConfig<ModConfig>();
-            eatAtAmount = config.StaminaThreshold;
-
-            if (eatAtAmount < 0)
+            eatAtStaminaAmount = config.StaminaThreshold;
+            if (eatAtStaminaAmount < 0)
             {
-                eatAtAmount = config.StaminaThreshold = 0;
+                eatAtStaminaAmount = config.StaminaThreshold = 0;
                 helper.WriteConfig(config);
             }
 
-            helper.ConsoleCommands.Add("player_setstaminathreshold", "Sets the threshold at which the player will automatically consume food.\nUsage: player_setstaminathreshold <value>\n- value: the float/integer amount.", this.SetStaminaThreshold); //command that sets when to automatically eat (i.e. 25 energy instead of 0)
+            eatAtHealthAmount = config.HealthThreshold;
+            if (eatAtHealthAmount < 0)
+            {
+                eatAtHealthAmount = config.HealthThreshold = 0;
+                helper.WriteConfig(config);
+            }
+
+            instantEatKey = config.InstantEatKey;
+            if (instantEatKey <= 0)
+            {
+                instantEatKey = config.InstantEatKey = SButton.Q;
+                helper.WriteConfig(config);
+            }
+            
+            
+
+            helper.ConsoleCommands.Add("player_setstaminathreshold", "Sets the stamina threshold at which the player will automatically consume food.\nUsage: player_setstaminathreshold <value>\n- value: the float/integer amount.", this.SetStaminaThreshold); //command that sets when to automatically eat (i.e. 25 energy instead of 0)
+            helper.ConsoleCommands.Add("player_sethealththreshold", "Sets the health threshold at which the player will automatically consume food.\nUsage: player_sethealththreshold <value>\n- value: the float/integer amount.", this.SetHealthThreshold); //command that sets when to automatically eat (i.e. 25 energy instead of 0)
+            helper.Events.Input.ButtonPressed += this.OnButtonPressed;
             helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked; //adding the method with the same name below to the corresponding event in order to make them connect
             helper.Events.GameLoop.Saving += this.OnSaving;
             helper.Events.GameLoop.DayStarted += this.OnDayStarted;
         }
+        
 
         public static void ClearOldestHUDMessage() //I may have stolen this idea from CJBok (props to them)
         {
@@ -60,7 +82,7 @@ namespace AutoEat
             if (newValue < 0.0f || newValue >= Game1.player.MaxStamina) //don't allow the stamina threshold to be set outside the possible bounds
                 newValue = 0.0f;
 
-            eatAtAmount = newValue;
+            eatAtStaminaAmount = newValue;
             ModConfig newConfig = new ModConfig()
             {
                 StaminaThreshold = newValue
@@ -68,6 +90,45 @@ namespace AutoEat
             this.Helper.WriteConfig(newConfig);
 
             this.Monitor.Log($"OK, set the stamina threshold to {newValue}.");
+        }
+        
+        private void SetHealthThreshold(string command, string[] args)
+        {
+            float newValue = (float)double.Parse(args[0]);
+
+            if (newValue < 0.0f || newValue >= Game1.player.maxHealth) //don't allow the stamina threshold to be set outside the possible bounds
+                newValue = 0.0f;
+
+            eatAtHealthAmount = newValue;
+            ModConfig newConfig = new ModConfig()
+            {
+                StaminaThreshold = newValue
+            };
+            
+            this.Helper.WriteConfig(newConfig);
+
+            this.Monitor.Log($"OK, set the health threshold to {newValue}.");
+        }
+        
+        /*********
+        ** Private methods
+        *********/
+        /// <summary>Raised after the player presses a button on the keyboard, controller, or mouse.</summary>
+        /// <param name="sender">The event sender.</param>
+        /// <param name="e">The event data.</param>
+        private void OnButtonPressed(object sender, ButtonPressedEventArgs e)
+        {
+            // ignore if player hasn't loaded a save yet
+            if (!Context.IsWorldReady)
+                return;
+
+            // print button presses to the console window
+            this.Monitor.Log($"{Game1.player.Name} pressed {e.Button}.", LogLevel.Debug);
+            this.Monitor.Log($"{Game1.player.Name} pressed {e.Button.GetHashCode()}. InstantEatKey is {instantEatKey.GetHashCode()}", LogLevel.Debug);
+            if (e.Button == instantEatKey)
+            {
+                eat();
+            }
         }
 
         /// <summary>Raised after the game state is updated (≈60 times per second).</summary>
@@ -80,7 +141,7 @@ namespace AutoEat
                 goodPreviousFrame = false;
                 return;
             }
-            if (Game1.player.Stamina <= eatAtAmount) //if the player has run out of Energy, then:
+            if (Game1.player.Stamina <= eatAtStaminaAmount || Game1.player.health <= eatAtHealthAmount) //if the player is low on energy or health, then:
             {
                 if (!goodPreviousFrame) //makes it so that they have to be "good" (doing nothing, not in a menu) two frames in a row in order for this to pass - necessary thanks to Lost Book bug (tl;dr - wait a frame before continuing)
                 {
@@ -94,16 +155,18 @@ namespace AutoEat
                 Item cheapestFood = GetCheapestFood(); //currently set to "null" (aka none), as we have not found a food yet
                 if (cheapestFood != null) //if a cheapest food was found, then:
                 {
-                    eatingFood = true;
-                    Game1.showGlobalMessage("You consume " + cheapestFood.Name + " to avoid over-exertion."); //makes a message to inform the player of the reason they just stopped what they were doing to be forced to eat a food, lol.
-                    Game1.player.eatObject((StardewValley.Object)cheapestFood); //cast the cheapestFood Item to be an Object since playerEatObject only accepts Objects, finally allowing the player to eat the cheapest food they have on them.
-                    //Game1.playerEatObject((StardewValley.Object)cheapestFood); //<== pre-multiplayer beta version of above line of code.
-                    cheapestFood.Stack--; //stack being the amount of the cheapestFood that the player has on them, we have to manually decrement this apparently, as playerEatObject does not do this itself for some reason.
-                    if (cheapestFood.Stack == 0) //if the stack has hit the number 0, then
-                        Game1.player.removeItemFromInventory(cheapestFood); //delete the item from the player's inventory..I don't want to know what would happen if they tried to use it when it was at 0!
+                    eat();
                 }
-                else if (Game1.player.stamina <= 0.0f) //however, if no food was found and the player's stamina is at 0, then [shoutouts to RobertLSnead again for pointing out some flawed code here]
-                    trueOverexertion = true; //the player will be over-exerted for the rest of the day, just like they normally would be. I made it this way intentionally, in order to keep this mod balanced!
+                else if (Game1.player.stamina <= 0.0f) //however, if no food was found and the player's stamina is at 0, then [shoutouts to RobertLSnead again for pointing out some flawed code here] 
+                {
+                    trueOverexertion =
+                        true; //the player will be over-exerted for the rest of the day, just like they normally would be. I made it this way intentionally, in order to keep this mod balanced!
+                }
+                else if (Game1.player.health <= 0.0f)
+                {
+                    Game1.player.temporarilyInvincible = false;
+                    Game1.player.passedOut = true;
+                }
             }
             else //if they have Energy (whether it's gained from food or it's the start of a day or whatever), then:
             {
@@ -111,12 +174,27 @@ namespace AutoEat
                 firstCall = true; //we set this to true here so that "clearOldestHUDMessage()" can seamlessly remove the "over-exerted" message whenever it needs to
                 if (eatingFood) //if the player was eating food before, then:
                 {
+                    Game1.player.temporarilyInvincible = false;
                     eatingFood = false; //they are no longer eating, meaning the above checks will be performed once more if they hit 0 Energy again.
                     //Game1.player.exhausted = false; //old way of doing it
                     Game1.player.exhausted.Value = false; //forcing the game to make the player not over-exerted anymore since that's what this mod's goal was
                     Game1.player.checkForExhaustion(Game1.player.Stamina); //forcing the game to make the player not over-exerted anymore since that's what this mod's goal was
                 }
             }
+        }
+
+        private void eat()
+        {
+            eatingFood = true;
+            Game1.player.temporarilyInvincible = true;
+            Item cheapestFood = GetCheapestFood(); //currently set to "null" (aka none), as we have not found a food yet
+            Game1.showGlobalMessage("You consume " + cheapestFood.Name + " to avoid over-exertion."); //makes a message to inform the player of the reason they just stopped what they were doing to be forced to eat a food, lol.
+            Game1.player.eatObject((StardewValley.Object)cheapestFood); //cast the cheapestFood Item to be an Object since playerEatObject only accepts Objects, finally allowing the player to eat the cheapest food they have on them.
+            //Game1.playerEatObject((StardewValley.Object)cheapestFood); //<== pre-multiplayer beta version of above line of code.
+            cheapestFood.Stack--; //stack being the amount of the cheapestFood that the player has on them, we have to manually decrement this apparently, as playerEatObject does not do this itself for some reason.
+            if (cheapestFood.Stack == 0) //if the stack has hit the number 0, then
+                Game1.player.removeItemFromInventory(cheapestFood); //delete the item from the player's inventory..I don't want to know what would happen if they tried to use it when it was at 0!
+
         }
 
         //will return null if no item found; shoutouts to RobertLSnead
