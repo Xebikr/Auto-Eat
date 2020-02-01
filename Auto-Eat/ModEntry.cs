@@ -14,15 +14,17 @@ namespace AutoEat
         ** Private and public variables
         *********/
 
-        private static bool trueOverexertion = false; //is only set to true when we want the player to become over-exerted for the rest of the in-game day
-        private static bool newDay = true; //only true at 6:00 am in-game
-        private static bool goodPreviousFrame = false; //used to prevent loss of food when falling to 0 Stamina on the same frame that you receive a Lost Book or something similar, in that order.
-        private static bool eatingFood = false; //just a boolean used to make it so that code doesn't run more than once.
+        private bool trueOverexertion = false; //is only set to true when we want the player to become over-exerted for the rest of the in-game day
+        private bool newDay = true; //only true at 6:00 am in-game
+        private bool goodPreviousFrame = false; //used to prevent loss of food when falling to 0 Stamina on the same frame that you receive a Lost Book or something similar, in that order.
+        private bool eatingFood = false; //just a boolean used to make it so that code doesn't run more than once.
 
-        public static bool firstCall = false; //used in clearOldestHUDMessage()
-        public static float eatAtStaminaAmount;
-        public static float eatAtHealthAmount;
-        public static SButton instantEatKey;
+        private bool firstCall = false; //used in clearOldestHUDMessage()
+        private float eatAtStaminaAmount;
+        private float eatAtHealthAmount;
+        private SButton instantEatKey;
+        private bool autoEatFood;
+        private bool eatCheapestFood;
 
         /*********
         ** Public methods
@@ -46,6 +48,20 @@ namespace AutoEat
                 helper.WriteConfig(config);
             }
 
+            autoEatFood = config.AutoEatFood;
+            if (!autoEatFood)
+            {
+                autoEatFood = config.AutoEatFood = false;
+                helper.WriteConfig(config);
+            }
+            
+            eatCheapestFood = config.EatCheapestFood;
+            if (!eatCheapestFood)
+            {
+                eatCheapestFood = config.EatCheapestFood = false;
+                helper.WriteConfig(config);
+            }
+
             instantEatKey = config.InstantEatKey;
             if (instantEatKey <= 0)
             {
@@ -64,7 +80,7 @@ namespace AutoEat
         }
         
 
-        public static void ClearOldestHUDMessage() //I may have stolen this idea from CJBok (props to them)
+        public void ClearOldestHUDMessage() //I may have stolen this idea from CJBok (props to them)
         {
             firstCall = false; //we do this so that, as long as we check for firstCall to be true, this method will not be executed every single tick (if we did not do this, a message would be removed from the HUD every tick!)
             if (Game1.hudMessages.Count > 0) //if there is at least 1 message on the screen, then
@@ -122,9 +138,7 @@ namespace AutoEat
             if (!Context.IsWorldReady)
                 return;
 
-            // print button presses to the console window
-            this.Monitor.Log($"{Game1.player.Name} pressed {e.Button}.", LogLevel.Debug);
-            this.Monitor.Log($"{Game1.player.Name} pressed {e.Button.GetHashCode()}. InstantEatKey is {instantEatKey.GetHashCode()}", LogLevel.Debug);
+            // check if instantEatKey
             if (e.Button == instantEatKey)
             {
                 eat();
@@ -152,7 +166,7 @@ namespace AutoEat
                     ClearOldestHUDMessage(); //get rid of the annoying over-exerted message without it noticeably popping up
                 if (eatingFood || Game1.player.isEating) //if already eating food, then ignore the rest of the method in order to prevent unnecessary loop
                     return;
-                Item cheapestFood = GetCheapestFood(); //currently set to "null" (aka none), as we have not found a food yet
+                Item cheapestFood = GetFood(); //currently set to "null" (aka none), as we have not found a food yet
                 if (cheapestFood != null) //if a cheapest food was found, then:
                 {
                     eat();
@@ -187,8 +201,8 @@ namespace AutoEat
         {
             eatingFood = true;
             Game1.player.temporarilyInvincible = true;
-            Item cheapestFood = GetCheapestFood(); //currently set to "null" (aka none), as we have not found a food yet
-            Game1.showGlobalMessage("You consume " + cheapestFood.Name + " to avoid over-exertion."); //makes a message to inform the player of the reason they just stopped what they were doing to be forced to eat a food, lol.
+            Item cheapestFood = GetFood(); //currently set to "null" (aka none), as we have not found a food yet
+            Game1.showGlobalMessage("You consume " + cheapestFood.Name + "."); //makes a message to inform the player of the reason they just stopped what they were doing to be forced to eat a food, lol.
             Game1.player.eatObject((StardewValley.Object)cheapestFood); //cast the cheapestFood Item to be an Object since playerEatObject only accepts Objects, finally allowing the player to eat the cheapest food they have on them.
             //Game1.playerEatObject((StardewValley.Object)cheapestFood); //<== pre-multiplayer beta version of above line of code.
             cheapestFood.Stack--; //stack being the amount of the cheapestFood that the player has on them, we have to manually decrement this apparently, as playerEatObject does not do this itself for some reason.
@@ -198,20 +212,25 @@ namespace AutoEat
         }
 
         //will return null if no item found; shoutouts to RobertLSnead
-        private Item GetCheapestFood()
+        private Item GetFood()
         {
-            Item cheapestFood = null; //currently set to "null" (aka none), as we have not found a food yet
+            Item food = null; //currently set to "null" (aka none), as we have not found a food yet
             foreach (Item curItem in Game1.player.Items) //check all of the player's inventory items sequentially (with "curItem" meaning "current item") for the following:
             {
                 if (curItem is StardewValley.Object && ((StardewValley.Object)curItem).Edibility > 0) //is it an Object (rather than, say, a Tool), and is it a food with positive Edibility (aka Energy)? then,
                 {
-                    if (cheapestFood == null) //if we do not yet have a cheapest food set, then
-                        cheapestFood = curItem; //the cheapest food has to be the current item, so that we can compare its price to another item without getting errors
-                    else if ((curItem.salePrice() / ((StardewValley.Object)curItem).Edibility) < (cheapestFood.salePrice() / ((StardewValley.Object)cheapestFood).Edibility)) //however, if we already have a cheapest food, and the ratio of price-to-stamina of the current item is even less, then
-                        cheapestFood = curItem; //the food with the least price-to-stamina ratio is actually the current item!
+                    if (food == null) //if we do not yet have a cheapest food set, then
+                        food = curItem; //the cheapest food has to be the current item, so that we can compare its price to another item without getting errors
+                    else if ((curItem.salePrice() / ((StardewValley.Object)curItem).Edibility) < (food.salePrice() / ((StardewValley.Object)food).Edibility)) //however, if we already have a cheapest food, and the ratio of price-to-stamina of the current item is even less, then
+                        food = curItem; //the food with the least price-to-stamina ratio is actually the current item!
+                }
+
+                if (food != null && !eatCheapestFood)
+                {
+                    return food;
                 }
             }
-            return cheapestFood;
+            return food;
         }
 
         /// <summary>Raised before the game begins writes data to the save file (except the initial save creation).</summary>

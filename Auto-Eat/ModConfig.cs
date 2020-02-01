@@ -8,6 +8,10 @@ namespace AutoEat
 
         public float HealthThreshold { get; set; }
         
+        public bool AutoEatFood { get; set; }
+        
+        public bool EatCheapestFood { get; set; }
+        
         public SButton InstantEatKey { get; set; }
     }
 }
