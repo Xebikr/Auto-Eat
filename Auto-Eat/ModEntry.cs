@@ -44,7 +44,7 @@ namespace AutoEat
             eatAtHealthAmount = config.HealthThreshold;
             if (eatAtHealthAmount < 0)
             {
-                eatAtHealthAmount = config.HealthThreshold = 0;
+                eatAtHealthAmount = config.HealthThreshold = 20;
                 helper.WriteConfig(config);
             }
 
